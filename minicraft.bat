@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
-title Minecraft Java + Bedrock Server
+title Minecraft Java + Bedrock Server Installer
 color 0A
 
 :: ============================================================
@@ -11,6 +11,7 @@ set "JAVA_PORT=25565"
 set "BEDROCK_PORT=19132"
 set "MIN_RAM=2G"
 set "MAX_RAM=4G"
+set "PAPER_USER_AGENT=MinecraftServerInstaller/2.0 (https://github.com/)"
 
 echo.
 echo ============================================================
@@ -30,7 +31,6 @@ net session >nul 2>&1
 if not "%errorlevel%"=="0" (
     echo.
     echo [ERROR] Jalankan file ini sebagai Administrator.
-    echo.
     echo Klik kanan file BAT ^> Run as administrator
     echo.
     pause
@@ -47,7 +47,6 @@ if not exist "%SERVER_DIR%\plugins" mkdir "%SERVER_DIR%\plugins"
 
 cd /d "%SERVER_DIR%"
 
-echo.
 echo Folder server:
 echo %SERVER_DIR%
 echo.
@@ -58,11 +57,9 @@ echo.
 echo [2/9] Mengecek winget...
 
 where winget >nul 2>&1
-
 if errorlevel 1 (
     echo.
     echo [ERROR] winget tidak ditemukan.
-    echo.
     echo Pastikan Windows App Installer tersedia.
     echo.
     pause
@@ -80,14 +77,15 @@ echo [3/9] Mengecek Java...
 set "JAVA_OK=0"
 
 where java >nul 2>&1
-
 if not errorlevel 1 (
-    java -version 2>&1 | findstr /C:"25." >nul
-
-    if not errorlevel 1 (
-        set "JAVA_OK=1"
-        echo Java 25 sudah tersedia.
+    for /f "tokens=3" %%V in ('java -version 2^>^&1 ^| findstr /C:"version"') do (
+        set "JAVA_VERSION=%%V"
     )
+
+    echo Java terdeteksi: !JAVA_VERSION!
+
+    java -version 2>&1 | findstr /C:"25." >nul
+    if not errorlevel 1 set "JAVA_OK=1"
 )
 
 if "%JAVA_OK%"=="0" (
@@ -100,14 +98,12 @@ if "%JAVA_OK%"=="0" (
         --id EclipseAdoptium.Temurin.25.JDK ^
         --exact ^
         --accept-package-agreements ^
-        --accept-source-agreements ^
-        --silent
+        --accept-source-agreements
 
     if errorlevel 1 (
         echo.
         echo [ERROR] Gagal menginstall Java 25.
-        echo.
-        echo Install Java 25 secara manual lalu jalankan script lagi.
+        echo Install Java 25 secara manual lalu jalankan BAT lagi.
         echo.
         pause
         exit /b 1
@@ -115,19 +111,24 @@ if "%JAVA_OK%"=="0" (
 
     echo.
     echo Java berhasil diinstall.
-    echo.
+    echo Memuat ulang PATH...
 
-    :: Refresh environment
-    set "PATH=%PATH%;C:\Program Files\Eclipse Adoptium\jdk-25-hotspot\bin"
+    :: Lokasi umum Temurin Java 25
+    for /d %%J in ("C:\Program Files\Eclipse Adoptium\jdk-25*") do (
+        if exist "%%~fJ\bin\java.exe" (
+            set "JAVA_HOME=%%~fJ"
+            set "PATH=%%~fJ\bin;!PATH!"
+            goto :JAVA_PATH_READY
+        )
+    )
 )
 
+:JAVA_PATH_READY
 where java >nul 2>&1
-
 if errorlevel 1 (
     echo.
     echo [ERROR] Java belum masuk PATH.
-    echo.
-    echo Tutup CMD ini lalu jalankan BAT kembali sebagai Administrator.
+    echo Tutup jendela ini lalu jalankan BAT kembali sebagai Administrator.
     echo.
     pause
     exit /b 1
@@ -138,46 +139,76 @@ java -version
 echo.
 
 :: ============================================================
-:: DOWNLOAD PAPER TERBARU
+:: DOWNLOAD PAPER TERBARU - STABLE
 :: ============================================================
-echo [4/9] Mencari Paper terbaru...
+echo [4/9] Mencari Paper stable terbaru...
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-"$h=@{'User-Agent'='MinecraftServerInstaller/1.0'}; ^
+"$ErrorActionPreference='Stop'; ^
+$h=@{'User-Agent'='%PAPER_USER_AGENT%'}; ^
 $r=Invoke-RestMethod -Headers $h -Uri 'https://fill.papermc.io/v3/projects/paper'; ^
-$v=$r.versions.PSObject.Properties.Name | Select-Object -Last 1; ^
-Set-Content 'paper-version.txt' $v"
+$versions=@($r.versions.PSObject.Properties.Value | ForEach-Object { $_ }) | ForEach-Object { $_ } | Where-Object { $_ -is [string] }; ^
+if (-not $versions) { throw 'Daftar versi Paper kosong' }; ^
+$v=$versions | Sort-Object { try { [version]$_ } catch { [version]'0.0' } } -Descending | Select-Object -First 1; ^
+Set-Content -Encoding ascii 'paper-version.txt' $v; ^
+Write-Host ('Paper version: '+$v)"
 
-if not exist "paper-version.txt" (
+if errorlevel 1 (
     echo.
     echo [ERROR] Tidak bisa mendapatkan versi Paper.
     pause
     exit /b 1
 )
 
+if not exist "paper-version.txt" (
+    echo.
+    echo [ERROR] paper-version.txt tidak dibuat.
+    pause
+    exit /b 1
+)
+
 set /p PAPER_VERSION=<paper-version.txt
+
+if "%PAPER_VERSION%"=="" (
+    echo.
+    echo [ERROR] Versi Paper kosong.
+    pause
+    exit /b 1
+)
 
 echo Paper version:
 echo %PAPER_VERSION%
 echo.
 
 :: ============================================================
-:: DOWNLOAD PAPER BUILD
+:: DOWNLOAD PAPER BUILD STABLE
 :: ============================================================
-echo Download Paper...
+echo Download Paper stable...
+
+if exist "paper.jar" del /q "paper.jar" >nul 2>&1
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-"$h=@{'User-Agent'='MinecraftServerInstaller/1.0'}; ^
+"$ErrorActionPreference='Stop'; ^
+$h=@{'User-Agent'='%PAPER_USER_AGENT%'}; ^
 $v='%PAPER_VERSION%'; ^
 $r=Invoke-RestMethod -Headers $h -Uri ('https://fill.papermc.io/v3/projects/paper/versions/'+$v+'/builds'); ^
-$b=$r | Where-Object {$_.channel -eq 'STABLE'} | Select-Object -First 1; ^
-if (!$b) {throw 'Paper stable build tidak ditemukan'}; ^
+$b=@($r | Where-Object {$_.channel -eq 'STABLE'}) | Select-Object -First 1; ^
+if (-not $b) { throw 'Paper stable build tidak ditemukan' }; ^
 Write-Host ('Build: '+$b.id); ^
-Invoke-WebRequest -Headers $h -Uri $b.downloads.'server:default'.url -OutFile 'paper.jar'"
+$u=$b.downloads.'server:default'.url; ^
+if (-not $u) { throw 'URL download Paper tidak ditemukan' }; ^
+Invoke-WebRequest -Headers $h -Uri $u -OutFile 'paper.jar'"
+
+if errorlevel 1 (
+    echo.
+    echo [ERROR] Paper gagal didownload.
+    pause
+    exit /b 1
+)
 
 if not exist "paper.jar" (
     echo.
-    echo [ERROR] Paper gagal didownload.
+    echo [ERROR] paper.jar tidak ditemukan setelah download.
     pause
     exit /b 1
 )
@@ -191,12 +222,20 @@ echo.
 echo [5/9] Download Geyser...
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-"$u='https://api.geysermc.org/v2/projects/geyser/versions/latest/builds/latest/downloads/spigot'; ^
+"$ErrorActionPreference='Stop'; ^
+$u='https://api.geysermc.org/v2/projects/geyser/versions/latest/builds/latest/downloads/spigot'; ^
 Invoke-WebRequest -Uri $u -OutFile 'plugins\Geyser-Spigot.jar'"
+
+if errorlevel 1 (
+    echo.
+    echo [ERROR] Geyser gagal didownload.
+    pause
+    exit /b 1
+)
 
 if not exist "plugins\Geyser-Spigot.jar" (
     echo.
-    echo [ERROR] Geyser gagal didownload.
+    echo [ERROR] Geyser-Spigot.jar tidak ditemukan.
     pause
     exit /b 1
 )
@@ -210,12 +249,20 @@ echo.
 echo [6/9] Download Floodgate...
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-"$u='https://api.geysermc.org/v2/projects/floodgate/versions/latest/builds/latest/downloads/spigot'; ^
+"$ErrorActionPreference='Stop'; ^
+$u='https://api.geysermc.org/v2/projects/floodgate/versions/latest/builds/latest/downloads/spigot'; ^
 Invoke-WebRequest -Uri $u -OutFile 'plugins\floodgate-spigot.jar'"
+
+if errorlevel 1 (
+    echo.
+    echo [ERROR] Floodgate gagal didownload.
+    pause
+    exit /b 1
+)
 
 if not exist "plugins\floodgate-spigot.jar" (
     echo.
-    echo [ERROR] Floodgate gagal didownload.
+    echo [ERROR] floodgate-spigot.jar tidak ditemukan.
     pause
     exit /b 1
 )
@@ -224,7 +271,7 @@ echo Floodgate berhasil.
 echo.
 
 :: ============================================================
-:: EULA
+:: EULA + SERVER CONFIG
 :: ============================================================
 echo [7/9] Membuat konfigurasi...
 
@@ -263,6 +310,8 @@ action=allow ^
 protocol=TCP ^
 localport=%JAVA_PORT% >nul
 
+if errorlevel 1 echo [WARNING] Rule Java Firewall gagal dibuat.
+
 netsh advfirewall firewall add rule ^
 name="Minecraft Bedrock Server" ^
 dir=in ^
@@ -270,7 +319,9 @@ action=allow ^
 protocol=UDP ^
 localport=%BEDROCK_PORT% >nul
 
-echo Firewall OK.
+if errorlevel 1 echo [WARNING] Rule Bedrock Firewall gagal dibuat.
+
+echo Firewall selesai.
 echo.
 
 :: ============================================================
@@ -278,14 +329,23 @@ echo.
 :: ============================================================
 echo [8/9] Menjalankan server pertama kali...
 echo.
-echo Tunggu sampai muncul:
+echo Server akan membuat konfigurasi Paper, Geyser, dan Floodgate.
+echo Tunggu sampai muncul "Done", lalu ketik:
 echo.
-echo     Done
+echo     stop
 echo.
-echo Setelah itu server akan dihentikan.
+echo Jangan tutup jendela dengan tombol X.
 echo.
 
 java -Xms%MIN_RAM% -Xmx%MAX_RAM% -jar paper.jar --nogui
+
+if errorlevel 1 (
+    echo.
+    echo [WARNING] Server berhenti dengan kode error %errorlevel%.
+    echo Cek pesan error di atas sebelum melanjutkan.
+    echo.
+    pause
+)
 
 :: ============================================================
 :: CONFIG GEYSER
@@ -296,19 +356,25 @@ echo Mengatur Geyser...
 set "GEYSER_CONFIG=%SERVER_DIR%\plugins\Geyser-Spigot\config.yml"
 
 if exist "%GEYSER_CONFIG%" (
-
     powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-    "$p='%GEYSER_CONFIG%'; ^
+    "$ErrorActionPreference='Stop'; ^
+    $p='%GEYSER_CONFIG%'; ^
     $s=Get-Content $p -Raw; ^
     $s=$s -replace '(?m)^(\s*port:\s*)[0-9]+\s*$', '${1}%BEDROCK_PORT%'; ^
     $s=$s -replace '(?m)^(\s*auth-type:\s*).*$','${1}floodgate'; ^
-    Set-Content $p $s"
+    Set-Content -Encoding utf8 $p $s"
 
-    echo Geyser dikonfigurasi.
+    if errorlevel 1 (
+        echo [WARNING] Konfigurasi Geyser gagal diubah otomatis.
+        echo Kamu masih bisa mengaturnya secara manual di:
+        echo %GEYSER_CONFIG%
+    ) else (
+        echo Geyser dikonfigurasi.
+    )
 ) else (
     echo.
     echo [WARNING] Config Geyser belum ditemukan.
-    echo Geyser akan membuatnya saat server dijalankan.
+    echo Jalankan start.bat sekali lagi agar Geyser membuat config.
 )
 
 :: ============================================================
@@ -319,38 +385,28 @@ echo Membuat start.bat...
 
 (
 echo @echo off
-echo setlocal EnableDelayedExpansion
+echo setlocal EnableExtensions EnableDelayedExpansion
 echo title Minecraft Java + Bedrock Server
 echo cd /d "%%~dp0"
 echo.
-echo :: Cari IP LAN PC
+echo :: Cari IP LAN menggunakan PowerShell agar tidak bergantung bahasa Windows
 echo set "LOCAL_IP="
-echo.
-echo for /f "tokens=2 delims=:" %%%%A in ^('ipconfig ^| findstr /C:"IPv4 Address" /C:"IPv4 Address ."'^) do ^(
-echo     set "TEMP_IP=%%%%A"
-echo     set "TEMP_IP=!TEMP_IP: =!"
-echo     if not "!TEMP_IP:~0,3!"=="127" set "LOCAL_IP=!TEMP_IP!"
-echo ^)
+echo for /f "usebackq delims=" %%%%A in ^(`powershell -NoProfile -Command "(Get-NetIPAddress -AddressFamily IPv4 ^| Where-Object {$_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' -and $_.PrefixOrigin -ne 'WellKnown'} ^| Select-Object -First 1 -ExpandProperty IPAddress)"`^) do set "LOCAL_IP=%%%%A"
 echo.
 echo if "!LOCAL_IP!"=="" set "LOCAL_IP=IP-TIDAK-TERDETEKSI"
 echo.
 echo cls
-echo.
 echo echo ==========================================
 echo echo       MINECRAFT SERVER ONLINE
 echo echo ==========================================
 echo echo.
 echo echo PC LAN IP:
-echo echo.
 echo echo     !LOCAL_IP!
 echo echo.
-echo echo ------------------------------------------
 echo echo JAVA:
-echo echo.
 echo echo     !LOCAL_IP!:%JAVA_PORT%
 echo echo.
 echo echo ANDROID / BEDROCK:
-echo echo.
 echo echo     Address : !LOCAL_IP!
 echo echo     Port    : %BEDROCK_PORT%
 echo echo.
@@ -360,22 +416,24 @@ echo echo ==========================================
 echo echo.
 echo echo Ketik "stop" untuk mematikan server.
 echo echo.
-echo.
 echo java -Xms%MIN_RAM% -Xmx%MAX_RAM% -jar paper.jar --nogui
 echo.
 echo pause
 ) > start.bat
 
 :: ============================================================
-:: CREATE UPDATE SCRIPT
+:: CREATE UPDATE-PLUGINS.BAT
 :: ============================================================
 (
 echo @echo off
+echo setlocal
 echo cd /d "%%~dp0"
 echo echo Updating Geyser...
-echo powershell -NoProfile -ExecutionPolicy Bypass -Command "$u='https://api.geysermc.org/v2/projects/geyser/versions/latest/builds/latest/downloads/spigot'; Invoke-WebRequest -Uri $u -OutFile 'plugins\Geyser-Spigot.jar'"
+echo powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $u='https://api.geysermc.org/v2/projects/geyser/versions/latest/builds/latest/downloads/spigot'; Invoke-WebRequest -Uri $u -OutFile 'plugins\Geyser-Spigot.jar'"
+echo if errorlevel 1 echo [ERROR] Geyser gagal diupdate.
 echo echo Updating Floodgate...
-echo powershell -NoProfile -ExecutionPolicy Bypass -Command "$u='https://api.geysermc.org/v2/projects/floodgate/versions/latest/builds/latest/downloads/spigot'; Invoke-WebRequest -Uri $u -OutFile 'plugins\floodgate-spigot.jar'"
+echo powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $u='https://api.geysermc.org/v2/projects/floodgate/versions/latest/builds/latest/downloads/spigot'; Invoke-WebRequest -Uri $u -OutFile 'plugins\floodgate-spigot.jar'"
+echo if errorlevel 1 echo [ERROR] Floodgate gagal diupdate.
 echo echo.
 echo echo Update selesai.
 echo pause
@@ -395,7 +453,7 @@ echo.
 echo Java:
 echo TCP %JAVA_PORT%
 echo.
-echo Android:
+echo Bedrock:
 echo UDP %BEDROCK_PORT%
 echo.
 echo File menjalankan server:
